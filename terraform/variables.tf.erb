@@ -1,0 +1,38 @@
+variable "region" {}
+
+variable "ami" {
+  description = "The AMIs we are going to use in each region"
+}
+
+variable "instance_type" {
+  description = "The instance types for the VPN appliances"
+}
+
+variable "vpc" {
+  description = "IDs of various VPCs"
+}
+
+<% cidr_prefix = "172.30" %>
+
+variable "vpc_cidr" {
+  description = "The CIDR block for the non-production VPC"
+  default = {
+    non_production = "<%= cidr_prefix %>.0.0/16"
+    production = "10.0.0.0/8"
+  }
+}
+
+variable "subnet" {
+  description = "Non-production public/private subnets across 3 zones"
+  default = {
+    public1a = "<%= cidr_prefix %>.0.0/24"
+    public1b = "<%= cidr_prefix %>.1.0/24"
+    private1a = "<%= cidr_prefix %>.2.0/24"
+    private1b = "<%= cidr_prefix %>.3.0/24"
+  }
+}
+
+variable "key" {
+  description = "SSH key to use for the instances"
+  default = "terraform-deployer"
+}

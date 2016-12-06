@@ -1,0 +1,183 @@
+provider "aws" {
+  region = "${var.region}"
+}
+
+# VPC
+
+resource "aws_vpc" "server" {
+  cidr_block = "${var.vpc_cidr["non_production"]}"
+  enable_dns_hostnames = true
+  tags {
+    Name = "server-vpc"
+  }
+}
+
+# Internet gateway
+
+resource "aws_internet_gateway" "server" {
+  vpc_id = "${aws_vpc.server.id}"
+  tags {
+    Name = "server-internet-gateway"
+  }
+}
+
+# Security groups for private, public, nat instances
+
+resource "aws_security_group" "server_private" {
+  name = "server_private_sg"
+  description = "Security group for private subnet"
+
+  ingress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  vpc_id = "${aws_vpc.server.id}"
+
+  tags {
+    Name = "server-private-sg"
+  }
+}
+
+resource "aws_security_group" "server_public" {
+  name = "server_public_sg"
+  description = "Security group for public subnet"
+
+  ingress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = [
+      "${var.vpc_cidr["non_production"]}",
+      "${var.vpc_cidr["production"]}"
+    ]
+  }
+
+  egress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  vpc_id = "${aws_vpc.server.id}"
+
+  tags {
+    Name = "server-public-sg"
+  }
+}
+
+resource "aws_security_group" "server_nat" {
+  name = "server_nat_sg"
+  description = "Security group for NAT instance"
+
+  ingress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = [
+      "${var.vpc_cidr["non_production"]}",
+      "${var.vpc_cidr["production"]}"
+    ]
+  }
+
+  egress {
+    from_port = 0
+    to_port = 0
+    protocol = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  vpc_id = "${aws_vpc.server.id}"
+
+  tags {
+    Name = "server-nat-sg"
+  }
+}
+
+# Subnets, using ERB because it is too fucking repetitive
+
+<% ["public", "private"].each do |visibility| %>
+  <% ["1a", "1b"].each do |zone| %>
+    <% subnet = "server_#{visibility}_#{zone}" %>
+resource "aws_subnet" "<%= subnet %>" {
+  vpc_id = "${aws_vpc.server.id}"
+cidr_block = "${var.subnet["<%= visibility %><%= zone %>"]}"
+  availability_zone = "us-west-<%= zone %>"
+  
+  tags {
+    Name = "server-<%= visibility %>-<%= zone %>"
+  }
+}
+
+resource "aws_route_table_association" "<%= visibility %>_<%= zone %>" {
+  subnet_id = "${aws_subnet.<%= subnet %>.id}"
+  route_table_id = "${aws_route_table.server_<%= visibility %>.id}"
+}
+  <% end %>
+<% end %>
+
+# Routing tables, 10.0.0.0/8 all go to the OpenSwan instance
+
+resource "aws_route_table" "server_public" {
+  vpc_id = "${aws_vpc.server.id}"
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = "${aws_internet_gateway.server.id}"
+  }
+  route {
+    cidr_block = "10.0.0.0/8"
+    instance_id = "${aws_instance.server_openswan.id}"
+  }
+}
+
+resource "aws_route_table" "server_private" {
+  vpc_id = "${aws_vpc.server.id}"
+  route {
+    cidr_block = "0.0.0.0/0"
+    instance_id = "${aws_instance.server_nat.id}"
+  }
+  route {
+    cidr_block = "10.0.0.0/8"
+    instance_id = "${aws_instance.server_openswan.id}"
+  }
+}
+
+# Elastic IPs for NAT and VPN instances
+
+resource "aws_eip" "server_openswan" {
+  vpc = true
+  instance = "${aws_instance.server_openswan.id}"
+}
+
+resource "aws_eip" "server_nat" {
+  vpc = true
+  instance = "${aws_instance.server_nat.id}"
+}
+
+# NAT and OpenSwan VPN instances
+
+<% ["nat", "openswan"].each do |instance| %>
+resource "aws_instance" "server_<%= instance %>" {
+  ami = "${var.ami["<%= instance %>"]}"
+  availability_zone = "us-west-1a"
+  instance_type = "${var.instance_type["<%= instance %>"]}"
+  key_name = "${var.key}"
+  security_groups = ["${aws_security_group.server_nat.id}"]
+  subnet_id = "${aws_subnet.server_public_1a.id}"
+  associate_public_ip_address = true
+  source_dest_check = false
+  tags {
+    Name = "NAT instance - <%= instance %>"
+  }
+}
+<% end %>
